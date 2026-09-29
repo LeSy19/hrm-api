@@ -15,6 +15,7 @@ public record LeaveBalanceResponseDto(
     string EmployeeCode,
     int LeaveTypeId,
     string LeaveTypeName,
+    bool IsPaid,
     int Year,
     decimal TotalDays,
     decimal UsedDays,

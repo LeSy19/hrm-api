@@ -27,6 +27,7 @@ public class LeaveTypeService
                 lt.Id,
                 lt.Name,
                 lt.DaysAllowed,
+                lt.IsPaid,
                 lt.IsActive
             ));
 
@@ -60,6 +61,7 @@ public class LeaveTypeService
         {
             Name = dto.Name,
             DaysAllowed = dto.DaysAllowed,
+            IsPaid = dto.IsPaid,
             IsActive = true
         };
 
@@ -87,6 +89,7 @@ public class LeaveTypeService
 
         leaveType.Name = dto.Name;
         leaveType.DaysAllowed = dto.DaysAllowed;
+        leaveType.IsPaid = dto.IsPaid;
         leaveType.IsActive = dto.IsActive;
 
         await _context.SaveChangesAsync();
@@ -123,6 +126,7 @@ public class LeaveTypeService
             lt.Id,
             lt.Name,
             lt.DaysAllowed,
+            lt.IsPaid,
             lt.IsActive
         );
     }

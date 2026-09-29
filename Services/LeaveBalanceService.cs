@@ -2,6 +2,7 @@ using BackendApp.Data;
 using BackendApp.DTOs;
 using BackendApp.DTOs.Common;
 using BackendApp.Extensions;
+using BackendApp.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace BackendApp.Services;
@@ -15,41 +16,32 @@ public class LeaveBalanceService
         _context = context;
     }
 
-    // 1. Xem quỹ phép của Nhân viên đang đăng nhập (Employee Self-Service)
+    // 1. Xem quỹ phép của Nhân viên đang đăng nhập
     public async Task<PagedResult<LeaveBalanceResponseDto>> GetMyBalancesAsync(LeaveBalanceFilterRequestDTO request, int currentEmployeeId, int? year)
     {
         int currentYear = year ?? DateTime.UtcNow.Year;
 
         var query = _context.LeaveBalances
-        .AsNoTracking()
-        .Include(lb => lb.Employee)
-        .Include(lb => lb.LeaveType)
-        .Where(lb =>
-            lb.EmployeeId == currentEmployeeId &&
-            lb.Year == currentYear
-        );
-
+            .AsNoTracking()
+            .Where(lb => lb.EmployeeId == currentEmployeeId && lb.Year == currentYear);
 
         var dtoQuery = query
-        .OrderBy(lb => lb.LeaveType.Name)
-        .Select(lb => new LeaveBalanceResponseDto(
-            lb.Id,
-            lb.EmployeeId,
-            lb.Employee.FullName,
-            lb.Employee.EmployeeCode,
-            lb.LeaveTypeId,
-            lb.LeaveType.Name,
-            lb.Year,
-            lb.TotalDays,
-            lb.UsedDays,
-            lb.RemainingDays
-        ));
+            .OrderBy(lb => lb.LeaveType.Name)
+            .Select(lb => new LeaveBalanceResponseDto(
+                lb.Id,
+                lb.EmployeeId,
+                lb.Employee.FullName,
+                lb.Employee.EmployeeCode,
+                lb.LeaveTypeId,
+                lb.LeaveType.Name,
+                lb.LeaveType.IsPaid,
+                lb.Year,
+                lb.TotalDays,
+                lb.UsedDays,
+                lb.RemainingDays
+            ));
 
-        // Thực thi phân trang
-        return await dtoQuery.ToPagedListAsync(
-            request.PageIndex,
-            request.PageSize
-        );
+        return await dtoQuery.ToPagedListAsync(request.PageIndex, request.PageSize);
     }
 
     // 2. Xem quỹ phép của tất cả nhân viên(HR/Admin quản lý)
@@ -62,48 +54,43 @@ public class LeaveBalanceService
     // - Trả về danh sách quỹ phép cho Admin/HR
     public async Task<PagedResult<LeaveBalanceResponseDto>> GetAllBalancesAsync(LeaveBalanceFilterRequestDTO request, int? year, int? departmentId)
     {
-        // - Nếu có truyền year -> sử dụng year được truyền vào
-        // - Nếu không truyền year -> mặc định lấy năm hiện tại
         int currentYear = year ?? DateTime.UtcNow.Year;
-
 
         var query = _context.LeaveBalances
             .AsNoTracking()
-            .Include(lb => lb.Employee)
-            .Include(lb => lb.LeaveType)
             .Where(lb => lb.Year == currentYear);
 
-        // -> Chỉ lấy quỹ phép của nhân viên thuộc phòng ban đó
-        // Nếu không truyền departmentId
-        // -> Giữ nguyên danh sách của tất cả phòng ban
         if (departmentId.HasValue)
         {
             query = query.Where(lb => lb.Employee.DepartmentId == departmentId.Value);
         }
 
+        if (!string.IsNullOrWhiteSpace(request.SearchTerm))
+        {
+            var term = request.SearchTerm.Trim().ToLower();
+            query = query.Where(lb => lb.Employee.FullName.ToLower().Contains(term) ||
+                                      lb.Employee.EmployeeCode.ToLower().Contains(term));
+        }
+
         var dtoQuery = query
-        .OrderBy(lb => lb.Employee.FullName)
-        .ThenBy(lb => lb.LeaveType.Name)
-        .Select(lb => new LeaveBalanceResponseDto(
-            lb.Id,
-            lb.EmployeeId,
-            lb.Employee.FullName,
-            lb.Employee.EmployeeCode,
-            lb.LeaveTypeId,
-            lb.LeaveType.Name,
-            lb.Year,
-            lb.TotalDays,
-            lb.UsedDays,
-            lb.RemainingDays
-        ));
+            .OrderBy(lb => lb.Employee.FullName)
+            .ThenBy(lb => lb.LeaveType.Name)
+            .Select(lb => new LeaveBalanceResponseDto(
+                lb.Id,
+                lb.EmployeeId,
+                lb.Employee.FullName,
+                lb.Employee.EmployeeCode,
+                lb.LeaveTypeId,
+                lb.LeaveType.Name,
+                lb.LeaveType.IsPaid,
+                lb.Year,
+                lb.TotalDays,
+                lb.UsedDays,
+                lb.RemainingDays
+            ));
 
-        // Thực thi phân trang
-        return await dtoQuery.ToPagedListAsync(
-            request.PageIndex,
-            request.PageSize
-        );
+        return await dtoQuery.ToPagedListAsync(request.PageIndex, request.PageSize);
     }
-
 
     // 3. Cấp quỹ phép cá nhân
     //
@@ -115,43 +102,40 @@ public class LeaveBalanceService
     // - Lưu thay đổi vào Database và trả về DTO kết quả
     public async Task<(bool Success, string Message, LeaveBalanceResponseDto? Data)> AssignBalanceAsync(AssignLeaveBalanceDto dto)
     {
-        // Check nhân viên & loại phép
+        if (dto.TotalDays < 0)
+            return (false, "Tổng số ngày phép không được nhỏ hơn 0.", null);
+
         var employee = await _context.Employees.FindAsync(dto.EmployeeId);
         if (employee == null) return (false, "Nhân viên không tồn tại.", null);
 
         var leaveType = await _context.LeaveTypes.FindAsync(dto.LeaveTypeId);
         if (leaveType == null) return (false, "Loại phép không tồn tại.", null);
 
-        // Kiểm tra nhân viên đã được cấp quỹ phép
-        // của loại phép này trong năm đó hay chưa
-        //
-        // Điều kiện kiểm tra:
-        // - Đúng nhân viên
-        // - Đúng loại phép
-        // - Đúng năm
+        // NGHỈ KHÔNG PHÉP / KHÔNG HƯỞNG LƯƠNG: Không tạo LeaveBalance
+        if (!leaveType.IsPaid)
+        {
+            return (false, $"Loại phép '{leaveType.Name}' là nghỉ không hưởng lương, không cần quản lý quỹ phép.", null);
+        }
+
+        // Include sẵn Employee và LeaveType để tránh NullReferenceException khi map DTO
         var existing = await _context.LeaveBalances
+            .Include(lb => lb.Employee)
+            .Include(lb => lb.LeaveType)
             .FirstOrDefaultAsync(lb =>
-            lb.EmployeeId == dto.EmployeeId &&
-            lb.LeaveTypeId == dto.LeaveTypeId &&
-            lb.Year == dto.Year);
+                lb.EmployeeId == dto.EmployeeId &&
+                lb.LeaveTypeId == dto.LeaveTypeId &&
+                lb.Year == dto.Year);
 
         if (existing != null)
         {
-            // Nếu đã có -> Cập nhật tổng số ngày phép
             existing.TotalDays = dto.TotalDays;
-            // Tính lại số ngày phép còn lại
-            // = Tổng ngày phép - Số ngày đã sử dụng
             existing.RemainingDays = existing.TotalDays - existing.UsedDays;
 
             await _context.SaveChangesAsync();
-
-            var updatedDto = MapToLeaveBalanceDTO(existing);
-
-            return (true, "Đã cập nhật lại quỹ phép cho nhân viên.", updatedDto);
+            return (true, "Đã cập nhật lại quỹ phép cho nhân viên.", MapToLeaveBalanceDTO(existing));
         }
 
-        // Tạo mới quỹ phép
-        var balance = new Models.LeaveBalance
+        var balance = new LeaveBalance
         {
             EmployeeId = dto.EmployeeId,
             LeaveTypeId = dto.LeaveTypeId,
@@ -163,6 +147,10 @@ public class LeaveBalanceService
 
         _context.LeaveBalances.Add(balance);
         await _context.SaveChangesAsync();
+
+        // Reload Navigation Property để map DTO không bị null
+        await _context.Entry(balance).Reference(b => b.Employee).LoadAsync();
+        await _context.Entry(balance).Reference(b => b.LeaveType).LoadAsync();
 
         return (true, "Cấp quỹ phép thành công.", MapToLeaveBalanceDTO(balance));
     }
@@ -177,29 +165,40 @@ public class LeaveBalanceService
     //     + Nếu chưa có -> Tạo mới bản ghi LeaveBalance (tăng createdCount)
     // - Lưu tất cả thay đổi vào Database trong một đợt SaveChangesAsync()
     // - Trả về số lượng bản ghi đã tạo mới và đã cập nhật
+    // 4. Cấp quỹ phép hàng loạt (Đã tối ưu - Giải quyết lỗi N+1 Query)
     public async Task<(int CreatedCount, int UpdatedCount)> BulkAssignAsync(BulkAssignLeaveBalanceDto dto)
     {
-        var activeEmployees = await _context.Employees
+        if (dto.TotalDays < 0)
+            throw new ArgumentException("Tổng số ngày phép không được nhỏ hơn 0.");
+
+        var leaveType = await _context.LeaveTypes.FindAsync(dto.LeaveTypeId);
+        if (leaveType == null || !leaveType.IsPaid)
+        {
+            // Nếu là loại phép không hưởng lương thì bỏ qua không cấp quỹ
+            return (0, 0);
+        }
+
+        // Lấy toàn bộ danh sách nhân viên ACTIVE
+        var activeEmployeeIds = await _context.Employees
             .Where(e => e.Status == "ACTIVE")
+            .Select(e => e.Id)
             .ToListAsync();
 
-        // CreatedCount: số quỹ phép được tạo mới
-        // UpdatedCount: số quỹ phép đã được cập nhật
+        if (!activeEmployeeIds.Any()) return (0, 0);
+
+        // Query 1 lần duy nhất lấy toàn bộ Balance hiện có trong năm của các nhân viên trên
+        var existingBalances = await _context.LeaveBalances
+            .Where(lb => lb.LeaveTypeId == dto.LeaveTypeId &&
+                         lb.Year == dto.Year &&
+                         activeEmployeeIds.Contains(lb.EmployeeId))
+            .ToDictionaryAsync(lb => lb.EmployeeId);
+
         int createdCount = 0;
         int updatedCount = 0;
 
-        foreach (var emp in activeEmployees)
+        foreach (var empId in activeEmployeeIds)
         {
-            var existing = await _context.LeaveBalances
-                .FirstOrDefaultAsync(lb =>
-                lb.EmployeeId == emp.Id &&
-                lb.LeaveTypeId == dto.LeaveTypeId &&
-                lb.Year == dto.Year);
-
-            // Nếu đã tồn tại quỹ phép
-            // -> Không tạo bản ghi mới
-            // -> Cập nhật lại tổng số ngày phép
-            if (existing != null)
+            if (existingBalances.TryGetValue(empId, out var existing))
             {
                 existing.TotalDays = dto.TotalDays;
                 existing.RemainingDays = existing.TotalDays - existing.UsedDays;
@@ -209,7 +208,7 @@ public class LeaveBalanceService
             {
                 var balance = new Models.LeaveBalance
                 {
-                    EmployeeId = emp.Id,
+                    EmployeeId = empId,
                     LeaveTypeId = dto.LeaveTypeId,
                     Year = dto.Year,
                     TotalDays = dto.TotalDays,
@@ -225,22 +224,40 @@ public class LeaveBalanceService
         return (createdCount, updatedCount);
     }
 
-    // 5. Hàm Helper Mapping từ Entity LeaveBalance sang DTO
-    public static LeaveBalanceResponseDto MapToLeaveBalanceDTO(Models.LeaveBalance lt)
+    // Helper Expression dùng cho IQueryable Select
+    private static System.Linq.Expressions.Expression<Func<LeaveBalance, LeaveBalanceResponseDto>> MapToDtoExpression(LeaveBalance lb)
+    {
+        return lb => new LeaveBalanceResponseDto(
+            lb.Id,
+            lb.EmployeeId,
+            lb.Employee.FullName,
+            lb.Employee.EmployeeCode,
+            lb.LeaveTypeId,
+            lb.LeaveType.Name,
+            lb.LeaveType.IsPaid,
+            lb.Year,
+            lb.TotalDays,
+            lb.UsedDays,
+            lb.RemainingDays
+        );
+    }
+
+    // Helper Mapping Entity -> DTO cho bối cảnh In-Memory Object
+    public static LeaveBalanceResponseDto MapToLeaveBalanceDTO(LeaveBalance lt)
     {
         return new LeaveBalanceResponseDto(
             lt.Id,
             lt.EmployeeId,
-            lt.Employee.FullName,
-            lt.Employee.EmployeeCode,
+            lt.Employee?.FullName ?? string.Empty,
+            lt.Employee?.EmployeeCode ?? string.Empty,
             lt.LeaveTypeId,
-            lt.LeaveType.Name,
+            lt.LeaveType?.Name ?? string.Empty,
+            lt.LeaveType?.IsPaid ?? true,
             lt.Year,
             lt.TotalDays,
             lt.UsedDays,
             lt.RemainingDays
         );
     }
-
 
 }

@@ -27,15 +27,13 @@ public class LeaveBalancesController : ControllerBase
     [FromQuery] LeaveBalanceFilterRequestDTO request,
     [FromQuery] int? year)
     {
-        // Lấy UserId từ Claim trong JWT Token
-        // NameIdentifier chứa ID của nhân viên đang đăng nhập
-        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        // Ưu tiên lấy Claim Custom "EmployeeId", nếu không có mới lấy NameIdentifier
+        var employeeIdClaim = User.FindFirst("EmployeeId")?.Value
+                              ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
-        // Kiểm tra UserId có tồn tại và có chuyển được sang kiểu int hay không
-        // Nếu không hợp lệ -> không xác định được danh tính người dùng
-        if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out int employeeId))
+        if (string.IsNullOrEmpty(employeeIdClaim) || !int.TryParse(employeeIdClaim, out int employeeId))
         {
-            return Unauthorized(new { message = "Không xác định được danh tính người dùng." });
+            return Unauthorized(new { message = "Không xác định được thông tin nhân viên từ token." });
         }
 
         var result = await _service.GetMyBalancesAsync(
@@ -79,13 +77,28 @@ public class LeaveBalancesController : ControllerBase
     [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> BulkAssignBalance([FromBody] BulkAssignLeaveBalanceDto dto)
     {
-        var (createdCount, updatedCount) = await _service.BulkAssignAsync(dto);
-        return Ok(new
+        if (dto == null)
+            return BadRequest(new { message = "Dữ liệu không hợp lệ." });
+
+        try
         {
-            message = $"Khởi tạo quỹ phép năm {dto.Year} hoàn tất.",
-            createdCount,
-            updatedCount
-        });
+            var (createdCount, updatedCount) = await _service.BulkAssignAsync(dto);
+
+            return Ok(new
+            {
+                message = $"Khởi tạo quỹ phép năm {dto.Year} hoàn tất.",
+                createdCount,
+                updatedCount
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = $"Lỗi hệ thống khi cấp phép hàng loạt: {ex.Message}" });
+        }
     }
 
 }

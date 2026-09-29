@@ -12,18 +12,21 @@ public record LeaveTypeResponseDto(
     int Id,
     string Name,
     decimal DaysAllowed,
+    bool IsPaid,
     bool IsActive
 );
 
 // DTO tạo mới loại phép
 public record CreateLeaveTypeDto(
     string Name,
-    decimal DaysAllowed
+    decimal DaysAllowed,
+    bool IsPaid
 );
 
 // DTO cập nhật loại phép
 public record UpdateLeaveTypeDto(
     string Name,
     decimal DaysAllowed,
+    bool IsPaid,
     bool IsActive
 );

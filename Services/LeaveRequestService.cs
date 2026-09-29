@@ -30,14 +30,19 @@ public class LeaveRequestService
     //     + Kiểm tra xem khoảng thời gian [StartDate, EndDate] có bị trùng với đơn nào khác (không phải trạng thái REJECTED) không
     // - Nếu hợp lệ -> Tạo đơn LeaveRequest mới với Status = "PENDING"
     // - Lưu đơn vào Database và trả về DTO thông tin đơn vừa tạo
+    /// 1. Employee tạo đơn xin nghỉ phép
     public async Task<(bool Success, string Message, LeaveRequestResponseDto? Data)> CreateLeaveRequestAsync(int employeeId, CreateLeaveRequestDto dto)
     {
-        if (dto.EndDate < dto.StartDate)
+        if (dto.EndDate.Date < dto.StartDate.Date)
             return (false, "Ngày kết thúc không được nhỏ hơn ngày bắt đầu.", null);
 
-        decimal totalRequestedDays = (decimal)(dto.EndDate.Date - dto.StartDate.Date).TotalDays + 1;
+        if (dto.StartDate.Date < DateTime.UtcNow.Date)
+            return (false, "Không thể tạo đơn xin nghỉ phép cho các ngày trong quá khứ.", null);
+
+        // Calculate actual working days excluding weekends (Sat & Sun)
+        decimal totalRequestedDays = CalculateWorkingDays(dto.StartDate, dto.EndDate);
         if (totalRequestedDays <= 0)
-            return (false, "Số ngày xin nghỉ phải lớn hơn 0.", null);
+            return (false, "Khoảng thời gian xin nghỉ không chứa ngày làm việc hợp lệ (chỉ rơi vào cuối tuần).", null);
 
         var leaveType = await _dbContext.LeaveTypes.FindAsync(dto.LeaveTypeId);
         if (leaveType == null)
@@ -45,12 +50,8 @@ public class LeaveRequestService
 
         int currentYear = dto.StartDate.Year;
 
-        // Xử lý logic Nghỉ không lương
-        bool isUnpaidLeave = leaveType.Name.ToLower().Contains("không lương")
-                          || leaveType.Name.ToLower().Contains("unpaid");
-
-        // --- BUSINESS RULE 1: Kiểm tra số dư quỹ phép (Chỉ áp dụng với phép CÓ HƯỞNG LƯƠNG) ---
-        if (!isUnpaidLeave)
+        // --- BUSINESS RULE 1: Kiểm tra số dư quỹ phép (Dựa trên IsPaid) ---
+        if (leaveType.IsPaid)
         {
             var balance = await _dbContext.LeaveBalances
                 .FirstOrDefaultAsync(lb =>
@@ -65,17 +66,17 @@ public class LeaveRequestService
                 return (false, $"Số ngày xin nghỉ ({totalRequestedDays} ngày) vượt quá số ngày phép có lương còn lại ({balance.RemainingDays} ngày).", null);
         }
 
-        // --- BUSINESS RULE 2: Overlap Date Validation (Chống trùng lịch cho MỌI loại phép) ---
+        // --- BUSINESS RULE 2: Chống trùng lịch (Overlapping Check) ---
         bool isOverlapping = await _dbContext.LeaveRequests
             .AnyAsync(lr => lr.EmployeeId == employeeId
                          && lr.Status != "REJECTED"
+                         && lr.Status != "CANCELLED"
                          && dto.StartDate.Date <= lr.EndDate.Date
                          && dto.EndDate.Date >= lr.StartDate.Date);
 
         if (isOverlapping)
             return (false, "Khoảng thời gian xin nghỉ bị trùng với một đơn nghỉ phép khác đã tạo trước đó.", null);
 
-        // Tạo đơn nghỉ phép với trạng thái PENDING
         var request = new LeaveRequest
         {
             EmployeeId = employeeId,
@@ -112,14 +113,11 @@ public class LeaveRequestService
     // - Sắp xếp danh sách đơn giảm dần theo thời gian tạo (CreatedAt)
     // - Mapping dữ liệu thu được sang dạng LeaveRequestResponseDto và trả về
     public async Task<PagedResult<LeaveRequestResponseDto>> GetMyLeaveRequestsAsync(
-    LeaveRequestFilterRequestDTO request,
-    int employeeId)
+         LeaveRequestFilterRequestDTO request,
+         int employeeId)
     {
         var query = _dbContext.LeaveRequests
             .AsNoTracking()
-            .Include(lr => lr.Employee)
-            .Include(lr => lr.LeaveType)
-            .Include(lr => lr.Approver)
             .Where(lr => lr.EmployeeId == employeeId);
 
         var dtoQuery = query
@@ -142,10 +140,7 @@ public class LeaveRequestService
                 lr.CreatedAt
             ));
 
-        return await dtoQuery.ToPagedListAsync(
-            request.PageIndex,
-            request.PageSize
-        );
+        return await dtoQuery.ToPagedListAsync(request.PageIndex, request.PageSize);
     }
 
     // 3. Manager xem đơn PENDING của nhân viên thuộc Phòng ban quản lý HOẶC cấp dưới trực tiếp; HR/Admin xem tất cả
@@ -156,19 +151,14 @@ public class LeaveRequestService
     //     + Manager là Người quản lý trực tiếp (lr.Employee.ManagerId == currentUserId)
     //     + HOẶC Manager là Trưởng phòng của phòng ban đó (lr.Employee.Department.ManagerId == currentUserId)
     public async Task<PagedResult<LeaveRequestResponseDto>> GetPendingLeaveRequestsAsync(
-    LeaveRequestFilterRequestDTO request,
-    int currentUserId,
-    bool isHRorAdmin)
+         LeaveRequestFilterRequestDTO request,
+         int currentUserId,
+         bool isHRorAdmin)
     {
         var query = _dbContext.LeaveRequests
-       .AsNoTracking()
-       .Include(lr => lr.Employee)
-           .ThenInclude(e => e.Department)
-       .Include(lr => lr.LeaveType)
-       .Where(lr => lr.Status == "PENDING");
+            .AsNoTracking()
+            .Where(lr => lr.Status == "PENDING");
 
-        // Manager chỉ xem đơn của cấp dưới
-        // Không cho Manager tự duyệt đơn của chính mình
         if (!isHRorAdmin)
         {
             query = query.Where(lr =>
@@ -202,10 +192,7 @@ public class LeaveRequestService
                 lr.CreatedAt
             ));
 
-        return await dtoQuery.ToPagedListAsync(
-            request.PageIndex,
-            request.PageSize
-        );
+        return await dtoQuery.ToPagedListAsync(request.PageIndex, request.PageSize);
     }
 
 
@@ -229,6 +216,7 @@ public class LeaveRequestService
     {
         var request = await _dbContext.LeaveRequests
             .Include(lr => lr.Employee)
+                .ThenInclude(e => e.Department)
             .Include(lr => lr.LeaveType)
             .FirstOrDefaultAsync(lr => lr.Id == requestId);
 
@@ -238,37 +226,32 @@ public class LeaveRequestService
         if (request.Status != "PENDING")
             return (false, "Đơn xin nghỉ này đã được xử lý trước đó.");
 
-        // 1. Kiểm tra đơn này có phải do chính người duyệt tự tạo hay không
         bool isSelfApproval = request.EmployeeId == approverId;
-
         if (isSelfApproval && !isHRorAdmin)
         {
-            return (false, "Bạn không thể tự phê duyệt đơn xin nghỉ phép của chính mình. Đơn này cần được duyệt bởi Admin hoặc Quản lý cấp cao hơn.");
+            return (false, "Bạn không thể tự phê duyệt đơn xin nghỉ phép của chính mình.");
         }
 
-        // 2. Kiểm tra quyền duyệt với nhân viên khác
         bool isDirectManager = request.Employee.ManagerId == approverId;
         bool isDepartmentManager = request.Employee.Department != null && request.Employee.Department.ManagerId == approverId;
 
         if (!isHRorAdmin && !isDirectManager && !isDepartmentManager)
         {
-            return (false, "Bạn không có quyền duyệt đơn của nhân viên này (không thuộc cấp dưới trực tiếp hoặc phòng ban do bạn quản lý).");
+            return (false, "Bạn không có quyền duyệt đơn của nhân viên này.");
         }
+
         using var transaction = await _dbContext.Database.BeginTransactionAsync();
         try
         {
             if (dto.IsApproved)
             {
-                bool isUnpaidLeave = request.LeaveType.Name.ToLower().Contains("không lương")
-                                  || request.LeaveType.Name.ToLower().Contains("unpaid");
-
-                int year = request.StartDate.Year;
-                var balance = await _dbContext.LeaveBalances
-                    .FirstOrDefaultAsync(lb => lb.EmployeeId == request.EmployeeId && lb.LeaveTypeId == request.LeaveTypeId && lb.Year == year);
-
-                // Nếu là Phép CÓ HƯỞNG LƯƠNG -> Bắt buộc kiểm tra và trừ quỹ phép
-                if (!isUnpaidLeave)
+                // Chỉ trừ LeaveBalance nếu loại phép đó CÓ HƯỞNG LƯƠNG (IsPaid = true)
+                if (request.LeaveType.IsPaid)
                 {
+                    int year = request.StartDate.Year;
+                    var balance = await _dbContext.LeaveBalances
+                        .FirstOrDefaultAsync(lb => lb.EmployeeId == request.EmployeeId && lb.LeaveTypeId == request.LeaveTypeId && lb.Year == year);
+
                     if (balance == null || balance.RemainingDays < request.TotalRequestedDays)
                     {
                         return (false, "Quỹ phép có lương của nhân viên không đủ để duyệt đơn này.");
@@ -276,11 +259,6 @@ public class LeaveRequestService
 
                     balance.UsedDays += request.TotalRequestedDays;
                     balance.RemainingDays = balance.TotalDays - balance.UsedDays;
-                }
-                else if (balance != null)
-                {
-                    // Nếu là NGHỈ KHÔNG LƯƠNG -> Chỉ ghi nhận số ngày đã nghỉ để phục vụ báo cáo
-                    balance.UsedDays += request.TotalRequestedDays;
                 }
 
                 request.Status = "APPROVED";
@@ -309,25 +287,64 @@ public class LeaveRequestService
         }
     }
 
-    // 5. Thống kê tổng số ngày nghỉ không lương của nhân viên theo Tháng/Năm
-    //
-    // Luồng xử lý:
-    // - Lọc các đơn xin nghỉ có trạng thái APPROVED
-    // - Lọc loại phép có tên chứa từ khóa "không lương" hoặc "unpaid"
-    // - Lọc theo Tháng và Năm của ngày bắt đầu nghỉ (StartDate)
-    // - Nếu truyền employeeId cụ thể -> Lọc cho 1 nhân viên; Nếu không -> Thống kê cho tất cả nhân viên
-    // - Nhóm (Group By) theo Nhân viên để tính tổng (SUM) số ngày đã nghỉ (TotalRequestedDays)
-    // - Trả về danh sách UnpaidLeaveSummaryDto cho HR/Kế toán chốt lương
+    /// 5. Employee Hủy đơn xin nghỉ (Hoàn trả lại quỹ phép nếu đơn đã Approve)
+    public async Task<(bool Success, string Message)> CancelLeaveRequestAsync(int requestId, int currentEmployeeId)
+    {
+        using var transaction = await _dbContext.Database.BeginTransactionAsync();
+        try
+        {
+            var request = await _dbContext.LeaveRequests
+                .Include(lr => lr.LeaveType)
+                .FirstOrDefaultAsync(lr => lr.Id == requestId && lr.EmployeeId == currentEmployeeId);
+
+            if (request == null)
+                return (false, "Đơn xin nghỉ phép không tồn tại hoặc bạn không có quyền hủy.");
+
+            if (request.Status == "CANCELLED" || request.Status == "REJECTED")
+                return (false, "Đơn xin nghỉ phép đã ở trạng thái không thể hủy.");
+
+            if (request.StartDate.Date <= DateTime.UtcNow.Date)
+                return (false, "Không thể hủy đơn xin nghỉ cho thời gian đã hoặc đang diễn ra.");
+
+            // Nếu đơn ĐÃ APPROVED và là PHÉP CÓ LƯƠNG -> Hoàn lại ngày phép
+            if (request.Status == "APPROVED" && request.LeaveType.IsPaid)
+            {
+                int year = request.StartDate.Year;
+                var balance = await _dbContext.LeaveBalances
+                    .FirstOrDefaultAsync(lb => lb.EmployeeId == request.EmployeeId && lb.LeaveTypeId == request.LeaveTypeId && lb.Year == year);
+
+                if (balance != null)
+                {
+                    balance.UsedDays -= request.TotalRequestedDays;
+                    if (balance.UsedDays < 0) balance.UsedDays = 0;
+                    balance.RemainingDays = balance.TotalDays - balance.UsedDays;
+                }
+            }
+
+            request.Status = "CANCELLED";
+
+            await _dbContext.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            return (true, "Đã hủy đơn xin nghỉ phép thành công.");
+        }
+        catch (Exception ex)
+        {
+            await transaction.RollbackAsync();
+            return (false, $"Lỗi khi hủy đơn xin nghỉ: {ex.Message}");
+        }
+    }
+
+    /// 6. Thống kê tổng số ngày nghỉ không lương của nhân viên theo Tháng/Năm
     public async Task<List<UnpaidLeaveSummaryDto>> GetUnpaidLeaveSummaryAsync(int month, int year, int? employeeId = null, int? departmentId = null)
     {
+        // Lấy danh sách các đơn Nghỉ không lương (IsPaid = false) ở trạng thái APPROVED
         var query = _dbContext.LeaveRequests
+            .AsNoTracking()
             .Include(lr => lr.Employee)
                 .ThenInclude(e => e.Department)
             .Include(lr => lr.LeaveType)
-            .Where(lr => lr.Status == "APPROVED"
-                      && (lr.LeaveType.Name.ToLower().Contains("không lương") || lr.LeaveType.Name.ToLower().Contains("unpaid"))
-                      && lr.StartDate.Month == month
-                      && lr.StartDate.Year == year);
+            .Where(lr => lr.Status == "APPROVED" && !lr.LeaveType.IsPaid);
 
         if (employeeId.HasValue)
         {
@@ -339,14 +356,20 @@ public class LeaveRequestService
             query = query.Where(lr => lr.Employee.DepartmentId == departmentId.Value);
         }
 
-        var result = await query
-            .GroupBy(lr => new
+        var requests = await query.ToListAsync();
+
+        // Lọc chính xác số ngày nghỉ không lương nằm trong tháng/năm yêu cầu (Xử lý đơn vắt 2 tháng)
+        var summaryList = requests
+            .Select(lr => new
             {
                 lr.EmployeeId,
                 lr.Employee.EmployeeCode,
                 lr.Employee.FullName,
-                DepartmentName = lr.Employee.Department != null ? lr.Employee.Department.Name : null
+                DepartmentName = lr.Employee.Department != null ? lr.Employee.Department.Name : null,
+                UnpaidDaysInMonth = CalculateUnpaidDaysInMonth(lr.StartDate, lr.EndDate, month, year)
             })
+            .Where(x => x.UnpaidDaysInMonth > 0)
+            .GroupBy(x => new { x.EmployeeId, x.EmployeeCode, x.FullName, x.DepartmentName })
             .Select(g => new UnpaidLeaveSummaryDto(
                 g.Key.EmployeeId,
                 g.Key.EmployeeCode,
@@ -354,10 +377,43 @@ public class LeaveRequestService
                 g.Key.DepartmentName,
                 month,
                 year,
-                g.Sum(lr => lr.TotalRequestedDays)
+                g.Sum(x => x.UnpaidDaysInMonth)
             ))
-            .ToListAsync();
+            .ToList();
 
-        return result;
+        return summaryList;
+    }
+
+    // --- HELPER METHODS ---
+
+    // Tính số ngày làm việc thực tế (Trừ Thứ 7 & Chủ Nhật)
+    private static decimal CalculateWorkingDays(DateTime startDate, DateTime endDate)
+    {
+        decimal count = 0;
+        for (var date = startDate.Date; date <= endDate.Date; date = date.AddDays(1))
+        {
+            if (date.DayOfWeek != DayOfWeek.Saturday && date.DayOfWeek != DayOfWeek.Sunday)
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // Tính số ngày nghỉ thực tế rơi vào đúng Tháng/Năm chỉ định
+    private static decimal CalculateUnpaidDaysInMonth(DateTime startDate, DateTime endDate, int targetMonth, int targetYear)
+    {
+        decimal count = 0;
+        for (var date = startDate.Date; date <= endDate.Date; date = date.AddDays(1))
+        {
+            if (date.Month == targetMonth && date.Year == targetYear)
+            {
+                if (date.DayOfWeek != DayOfWeek.Saturday && date.DayOfWeek != DayOfWeek.Sunday)
+                {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 }
