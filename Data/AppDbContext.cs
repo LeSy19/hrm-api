@@ -14,6 +14,8 @@ public class AppDbContext : DbContext
     public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
     public DbSet<LeaveBalance> LeaveBalances => Set<LeaveBalance>();
     public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+    public DbSet<Permission> Permissions => Set<Permission>();
+    public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -125,5 +127,26 @@ public class AppDbContext : DbContext
              .HasForeignKey(lr => lr.ApprovedBy)
              .OnDelete(DeleteBehavior.Restrict);
         });
+
+        // 7. RolePermission
+        modelBuilder.Entity<RolePermission>(p =>
+        {
+            p.HasKey(rp => new { rp.RoleId, rp.PermissionId });
+
+            p.HasOne(rp => rp.Role)
+                  .WithMany(r => r.RolePermissions)
+                  .HasForeignKey(rp => rp.RoleId);
+
+            p.HasOne(rp => rp.Permission)
+                  .WithMany(p => p.RolePermissions)
+                  .HasForeignKey(rp => rp.PermissionId);
+        });
+
+        modelBuilder.Entity<Permission>(entity =>
+        {
+            entity.HasIndex(p => p.Code).IsUnique();
+        });
+
+
     }
 }

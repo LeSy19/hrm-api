@@ -16,6 +16,7 @@ public record LeaveRequestResponseDto(
     string EmployeeCode,
     int LeaveTypeId,
     string LeaveTypeName,
+    bool IsPaid,
     DateTime StartDate,
     DateTime EndDate,
     decimal TotalRequestedDays,
@@ -30,6 +31,7 @@ public record LeaveRequestResponseDto(
 // DTO Employee tạo đơn xin nghỉ
 public record CreateLeaveRequestDto(
     int LeaveTypeId,
+    bool IsPaid,
     DateTime StartDate,
     DateTime EndDate,
     string? Reason

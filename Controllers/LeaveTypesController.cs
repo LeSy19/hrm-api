@@ -10,6 +10,7 @@ namespace BackendApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class LeaveTypesController : ControllerBase
 {
     private readonly LeaveTypeService _service;
@@ -21,7 +22,6 @@ public class LeaveTypesController : ControllerBase
 
     // 1. Lấy danh sách tất cả các loại phép
     [HttpGet]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<ActionResult<PagedResult<LeaveTypeResponseDto>>> GetAllLeaveTypes([FromQuery] LeaveTypeFilterRequestDTO request)
     {
         var leaveTypes = await _service.GetAllLeaveTypesAsync(request);
@@ -30,7 +30,6 @@ public class LeaveTypesController : ControllerBase
 
     // 2. Lấy loại phép theo Id
     [HttpGet("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<ActionResult<LeaveTypeResponseDto>> GetLeaveTypeById(int id)
     {
         var res = await _service.GetLeaveTypeByIdAsync(id);
@@ -39,7 +38,6 @@ public class LeaveTypesController : ControllerBase
 
     // 3. Tạo mới loại phép
     [HttpPost]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> Create([FromBody] CreateLeaveTypeDto dto)
     {
         try
@@ -58,7 +56,6 @@ public class LeaveTypesController : ControllerBase
 
     // PUT: api/leavetypes/5 (Chỉ Admin & HR có quyền sửa)
     [HttpPut("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateLeaveTypeDto dto)
     {
         try
@@ -74,7 +71,6 @@ public class LeaveTypesController : ControllerBase
 
     // DELETE: api/leavetypes/5 (Chỉ Admin có quyền xóa)
     [HttpDelete("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.AdminOnly)]
     public async Task<IActionResult> Delete(int id)
     {
         var (success, message) = await _service.DeleteLeaveTypeAsync(id);

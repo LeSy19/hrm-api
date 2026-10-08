@@ -96,7 +96,7 @@ public class LeaveRequestService
 
         var resultDto = new LeaveRequestResponseDto(
             request.Id, employeeId, employee!.FullName, employee.EmployeeCode,
-            leaveType.Id, leaveType.Name, request.StartDate, request.EndDate,
+            leaveType.Id, leaveType.Name, leaveType.IsPaid, request.StartDate, request.EndDate,
             request.TotalRequestedDays, request.Reason, request.Status,
             null, null, null, request.CreatedAt
         );
@@ -129,6 +129,7 @@ public class LeaveRequestService
                 lr.Employee.EmployeeCode,
                 lr.LeaveTypeId,
                 lr.LeaveType.Name,
+                lr.LeaveType.IsPaid,
                 lr.StartDate,
                 lr.EndDate,
                 lr.TotalRequestedDays,
@@ -141,6 +142,56 @@ public class LeaveRequestService
             ));
 
         return await dtoQuery.ToPagedListAsync(request.PageIndex, request.PageSize);
+    }
+
+    public async Task<PagedResult<LeaveRequestResponseDto>> GetAllLeaveRequestsAsync(
+        LeaveRequestFilterRequestDTO request,
+        int currentUserId,
+        bool isAdmin)
+    {
+        var query = _dbContext.LeaveRequests
+            .AsNoTracking();
+
+        // Không phải Admin
+        // → chỉ xem đơn trong phạm vi quản lý của mình
+        if (!isAdmin)
+        {
+            query = query.Where(lr =>
+                lr.EmployeeId != currentUserId &&
+                (
+                    lr.Employee.ManagerId == currentUserId ||
+                    (
+                        lr.Employee.Department != null &&
+                        lr.Employee.Department.ManagerId == currentUserId
+                    )
+                ));
+        }
+
+        var dtoQuery = query
+            .OrderByDescending(lr => lr.CreatedAt)
+            .Select(lr => new LeaveRequestResponseDto(
+                lr.Id,
+                lr.EmployeeId,
+                lr.Employee.FullName,
+                lr.Employee.EmployeeCode,
+                lr.LeaveTypeId,
+                lr.LeaveType.Name,
+                lr.LeaveType.IsPaid,
+                lr.StartDate,
+                lr.EndDate,
+                lr.TotalRequestedDays,
+                lr.Reason,
+                lr.Status,
+                lr.ApprovedBy,
+                null,
+                lr.RejectionReason,
+                lr.CreatedAt
+            ));
+
+        return await dtoQuery.ToPagedListAsync(
+            request.PageIndex,
+            request.PageSize
+        );
     }
 
     // 3. Manager xem đơn PENDING của nhân viên thuộc Phòng ban quản lý HOẶC cấp dưới trực tiếp; HR/Admin xem tất cả
@@ -181,6 +232,7 @@ public class LeaveRequestService
                 lr.Employee.EmployeeCode,
                 lr.LeaveTypeId,
                 lr.LeaveType.Name,
+                lr.LeaveType.IsPaid,
                 lr.StartDate,
                 lr.EndDate,
                 lr.TotalRequestedDays,

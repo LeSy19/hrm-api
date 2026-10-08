@@ -33,7 +33,6 @@ public class JobTitlesController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = "Admin,HRManager")]
     public async Task<IActionResult> CreateJobTitle([FromBody] CreateJobTitleDto dto)
     {
         var res = await _jobTitleService.CreateJobTitleAsync(dto);
@@ -41,7 +40,6 @@ public class JobTitlesController : ControllerBase
     }
 
     [HttpPut("{id:int}")]
-    [Authorize(Roles = "Admin,HRManager")]
     public async Task<IActionResult> UpdateJobTitle(int id, [FromBody] UpdateJobTitleDto dto)
     {
         var res = await _jobTitleService.UpdateJobTitleAsync(id, dto);
@@ -49,7 +47,6 @@ public class JobTitlesController : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
-    [Authorize(Roles = "Admin")]
     public async Task<IActionResult> Delete(int id)
     {
         var (success, message) = await _jobTitleService.DeleteJobTitleAsync(id);

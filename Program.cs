@@ -8,8 +8,9 @@ using Scalar.AspNetCore;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.Extensions.DependencyInjection;
 using BackendApp.Configurations;
+using BackendApp.Configurations.Authorization;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
@@ -49,8 +50,11 @@ builder.Services.AddScoped<LeaveTypeService>();
 builder.Services.AddScoped<LeaveBalanceService>();
 builder.Services.AddScoped<LeaveRequestService>();
 builder.Services.AddScoped<DashboardService>();
-builder.Services.AddControllers();
 
+// Phân quyền động theo endpoint
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<IPermissionService, PermissionService>();
+builder.Services.AddScoped<IRolePermissionService, RolePermissionService>();
 
 // Cấu hình JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -96,8 +100,6 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-
-
 // 4. CORS
 builder.Services.AddCors(options =>
 {
@@ -108,10 +110,13 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod()
               .AllowCredentials();
     });
-
 });
 
-builder.Services.AddControllers();
+// Controllers + filter phân quyền toàn cục theo endpoint
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<EndpointPermissionFilter>();
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi(options =>
 {
@@ -126,7 +131,7 @@ builder.Services.AddAppAuthorizationPolicies();
 
 var app = builder.Build();
 
-// --- TỐI ƯU GỘP: KIỂM TRA KẾT NỐI DB, MIGRATE & SEED DATA (DÙNG 1 SCOPE DUY NHẤT) ---
+// --- KIỂM TRA KẾT NỐI DB, MIGRATE & SEED DATA (1 SCOPE DUY NHẤT) ---
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -144,33 +149,36 @@ using (var scope = app.Services.CreateScope())
             logger.LogWarning(">>> [DATABASE] Không thể kết nối tới MySQL Database! <<<");
         }
 
-        // Tự động Migrate toàn bộ Schema mới nhất bất đồng bộ
         logger.LogInformation("Đang thực thi Migrations vào MySQL...");
         await context.Database.MigrateAsync();
         logger.LogInformation("Migrate Database hoàn tất thành công!");
 
-        // Gọi Seeder tự động nạp Roles
+        // Seed Roles mặc định + tài khoản admin
         await DbSeeder.SeedRolesAsync(context);
-        logger.LogInformation("Seed Data Roles thành công!");
+        logger.LogInformation("Seed Roles/Admin thành công!");
+
+        // Quét toàn bộ endpoint trong controller và đồng bộ vào bảng Permissions
+        await EndpointPermissionSync.SyncAsync(context,
+            services.GetRequiredService<IActionDescriptorCollectionProvider>());
+        logger.LogInformation("Đồng bộ Endpoint -> Permissions thành công!");
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, ">>> [DATABASE] Lỗi kết nối hoặc thực thi Migrate Database thất bại! <<<");
+        logger.LogError(ex, ">>> [DATABASE] Lỗi kết nối, Migrate hoặc Seed thất bại! <<<");
+        if (app.Environment.IsDevelopment()) throw; // Dev: dừng app để thấy lỗi ngay
     }
 }
 
 // 5. Cấu hình Scalar UI trong môi trường Development
 if (app.Environment.IsDevelopment())
 {
-    // BẮT BUỘC: Thêm .AllowAnonymous() cho CẢ HAI endpoint này
     app.MapOpenApi().AllowAnonymous();
     app.MapScalarApiReference().AllowAnonymous();
 }
 
 app.UseCors("AllowFrontend");
-//Thêm 2 Middleware này theo đúng thứ tự (Trước MapControllers)
-app.UseAuthentication(); // 1. Xác định User là ai từ JWT Token
-app.UseAuthorization();  // 2. Kiểm tra User có quyền gì
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 app.UseHangfireDashboard("/hangfire");

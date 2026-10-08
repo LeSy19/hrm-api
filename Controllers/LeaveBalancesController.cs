@@ -11,6 +11,7 @@ namespace BackendApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class LeaveBalancesController : ControllerBase
 {
     private readonly LeaveBalanceService _service;
@@ -22,7 +23,6 @@ public class LeaveBalancesController : ControllerBase
 
     // Employee xem quỹ phép của chính mình
     [HttpGet("my-balance")]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<ActionResult<PagedResult<LeaveBalanceResponseDto>>> GetMyBalance(
     [FromQuery] LeaveBalanceFilterRequestDTO request,
     [FromQuery] int? year)
@@ -47,7 +47,6 @@ public class LeaveBalancesController : ControllerBase
 
     // HR / Admin xem danh sách quỹ phép toàn công ty
     [HttpGet]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<ActionResult<PagedResult<LeaveBalanceResponseDto>>> GetAllBalances(
     [FromQuery] LeaveBalanceFilterRequestDTO request,
     [FromQuery] int? year,
@@ -64,7 +63,6 @@ public class LeaveBalancesController : ControllerBase
 
     // HR / Admin cấp phép lẻ cho 1 nhân viên
     [HttpPost("assign")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> AssignBalance([FromBody] AssignLeaveBalanceDto dto)
     {
         var (success, message, data) = await _service.AssignBalanceAsync(dto);
@@ -74,7 +72,6 @@ public class LeaveBalancesController : ControllerBase
 
     // 4. HR / Admin cấp phép hàng loạt đầu năm cho tất cả nhân viên
     [HttpPost("bulk-assign")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> BulkAssignBalance([FromBody] BulkAssignLeaveBalanceDto dto)
     {
         if (dto == null)

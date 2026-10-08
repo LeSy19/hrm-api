@@ -98,7 +98,7 @@ public class DashboardService
     // Luồng xử lý:
     // - Nhận tham số Month và Year (mặc định tháng/năm hiện tại)
     // - Đếm số lượng đơn theo từng trạng thái: PENDING, APPROVED, REJECTED trong tháng đó
-    public async Task<MonthlyLeaveStatsDto> GetMonthlyLeaveStatsAsync(int? month, int? year)
+    public async Task<MonthlyLeaveStatusDto> GetMonthlyLeaveStatsAsync(int? month, int? year)
     {
         int targetMonth = month ?? DateTime.UtcNow.Month;
         int targetYear = year ?? DateTime.UtcNow.Year;
@@ -112,6 +112,6 @@ public class DashboardService
         int totalApproved = await requestsInMonth.CountAsync(lr => lr.Status == "APPROVED");
         int totalRejected = await requestsInMonth.CountAsync(lr => lr.Status == "REJECTED");
 
-        return new MonthlyLeaveStatsDto(targetMonth, targetYear, totalPending, totalApproved, totalRejected);
+        return new MonthlyLeaveStatusDto(targetMonth, targetYear, totalPending, totalApproved, totalRejected);
     }
 }

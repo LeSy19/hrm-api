@@ -11,6 +11,7 @@ namespace BackendApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class LeaveRequestsController : ControllerBase
 {
     private readonly LeaveRequestService _leaveRequestService;
@@ -20,9 +21,34 @@ public class LeaveRequestsController : ControllerBase
         _leaveRequestService = leaveRequestService;
     }
 
+
+    [HttpGet]
+    public async Task<ActionResult<PagedResult<LeaveRequestResponseDto>>> GetAllRequests(
+    [FromQuery] LeaveRequestFilterRequestDTO request)
+    {
+        int currentUserId = GetCurrentUserId();
+
+        if (currentUserId == 0)
+        {
+            return Unauthorized(new
+            {
+                message = "Không xác định được danh tính người dùng từ Token."
+            });
+        }
+
+        bool isAdmin = User.IsInRole(UserRoles.Admin);
+
+        var requests = await _leaveRequestService.GetAllLeaveRequestsAsync(
+            request,
+            currentUserId,
+            isAdmin
+        );
+
+        return Ok(requests);
+    }
+
     // 1. Employee nộp đơn xin nghỉ phép
     [HttpPost]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<IActionResult> CreateRequest([FromBody] CreateLeaveRequestDto dto)
     {
         int employeeId = GetCurrentUserId();
@@ -39,7 +65,6 @@ public class LeaveRequestsController : ControllerBase
 
     // 2. Employee xem lịch sử danh sách đơn xin nghỉ của chính mình
     [HttpGet("my-requests")]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<ActionResult<PagedResult<LeaveRequestResponseDto>>> GetMyRequests(
         [FromQuery] LeaveRequestFilterRequestDTO request)
     {
@@ -54,7 +79,6 @@ public class LeaveRequestsController : ControllerBase
 
     // 3. Manager/HR/Admin xem danh sách đơn đang chờ duyệt (PENDING)
     [HttpGet("request-pending")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<ActionResult<PagedResult<LeaveRequestResponseDto>>> GetPendingRequests(
         [FromQuery] LeaveRequestFilterRequestDTO request)
     {
@@ -75,7 +99,6 @@ public class LeaveRequestsController : ControllerBase
 
     // 4. Manager/HR/Admin Phê duyệt (APPROVED) hoặc Từ chối (REJECTED) đơn xin nghỉ
     [HttpPut("{id:int}/process")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> ProcessRequest(int id, [FromBody] ApproveLeaveRequestDto dto)
     {
         int approverId = GetCurrentUserId();
@@ -94,7 +117,6 @@ public class LeaveRequestsController : ControllerBase
 
     // 5. Employee Hủy đơn xin nghỉ (Hoàn lại phép năm nếu đơn đã duyệt trước đó)
     [HttpPut("{id:int}/cancel")]
-    [Authorize(Policy = RolePolicySetup.Policies.StaffAccess)]
     public async Task<IActionResult> CancelRequest(int id)
     {
         int employeeId = GetCurrentUserId();
@@ -111,7 +133,6 @@ public class LeaveRequestsController : ControllerBase
 
     // 6. HR/Admin/Kế toán xem thống kê tổng hợp số ngày nghỉ không lương trong tháng
     [HttpGet("unpaid-summary")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<ActionResult<PagedResult<UnpaidLeaveSummaryDto>>> GetUnpaidLeaveSummary(
         [FromQuery] int month,
         [FromQuery] int year,

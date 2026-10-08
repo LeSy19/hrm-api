@@ -8,7 +8,7 @@ namespace BackendApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize(Policy = RolePolicySetup.Policies.Management)] // Chỉ Admin, HRManager và Manager có quyền xem Dashboard
+[Authorize]
 public class DashboardController : ControllerBase
 {
     private readonly DashboardService _dashboardService;
@@ -47,7 +47,7 @@ public class DashboardController : ControllerBase
 
     // 4. Thống kê tình trạng đơn nghỉ phép trong tháng
     // GET: api/dashboard/monthly-leave-stats?month=10&year=2026
-    [HttpGet("monthly-leave-stats")]
+    [HttpGet("monthly-leave-status")]
     public async Task<IActionResult> GetMonthlyLeaveStats([FromQuery] int? month, [FromQuery] int? year)
     {
         var result = await _dashboardService.GetMonthlyLeaveStatsAsync(month, year);

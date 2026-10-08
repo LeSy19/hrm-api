@@ -10,6 +10,7 @@ namespace BackendApp.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class DepartmentsController : ControllerBase
 {
     private readonly DepartmentService _departmentService;
@@ -28,7 +29,6 @@ public class DepartmentsController : ControllerBase
     }
 
     [HttpGet("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)] // Chỉ Admin hoặc Manager được tạo
     public async Task<IActionResult> GetById(int id)
     {
         var res = await _departmentService.GetDepartmentByIdAsync(id);
@@ -36,7 +36,6 @@ public class DepartmentsController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> Create([FromBody] CreateDepartmentDto dto)
     {
         var res = await _departmentService.CreateDepartmentAsync(dto);
@@ -45,7 +44,6 @@ public class DepartmentsController : ControllerBase
     }
 
     [HttpPut("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.Management)]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateDepartmentDto dto)
     {
         try
@@ -60,7 +58,6 @@ public class DepartmentsController : ControllerBase
     }
 
     [HttpDelete("{id:int}")]
-    [Authorize(Policy = RolePolicySetup.Policies.AdminOnly)]
     public async Task<IActionResult> Delete(int id)
     {
         var (success, message) = await _departmentService.DeleteDepartmentAsync(id);

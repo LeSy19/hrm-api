@@ -29,7 +29,7 @@ public record EmployeeOnLeaveTodayDto(
 );
 
 // DTO Thống kê trạng thái đơn nghỉ phép trong tháng
-public record MonthlyLeaveStatsDto(
+public record MonthlyLeaveStatusDto(
     int Month,
     int Year,
     int TotalPending,
